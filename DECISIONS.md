@@ -178,3 +178,75 @@ the report models. Splitting the markdown rendering into its own module would st
 leave profiling itself over 400 lines while severing the shared `cap_text`/escape
 helpers and the report models from their only caller, so the seam buys churn, not
 clarity. Revisit if a second report format or a non-markdown renderer lands.
+
+## D-019 (2026-06-15) — `run_sql` read-only gate: parser + keyword + function denylist
+
+DuckDB's parser is the first layer (`extract_statements`): exactly one statement,
+type `SELECT`. But that alone is not "read-only" — DuckDB classifies `PRAGMA` and
+`CALL` as `SELECT`, and a plain `SELECT` can still read the filesystem via table
+functions (`read_csv('/etc/passwd')`, `glob('/**')`) or reach the network via httpfs.
+So two more deterministic layers sit on top (`security.validate_select`): a
+first-keyword denylist (catches `PRAGMA`/`CALL`/settings/DDL/DML/transaction verbs
+after comment-stripping) and a denylist of filesystem/network functions matched as
+`name(` tokens. False positives (a *column* named `glob`) are avoided because the
+match requires a call paren; a determined reader of exotic functions is the residual
+gap, accepted because the broader system blocks network egress and bounds output.
+This runs on the session connection (no separate read-only connection) because
+`enable_external_access` is a global setting the ingest path needs left on.
+
+## D-020 (2026-06-15) — `run_sql` results stream to Parquet; previews are text-cast, host-independent
+
+The full result is written with DuckDB's own Parquet writer (`relation.write_parquet`),
+never materialized through the Python client — so a `TIMESTAMPTZ` in the result never
+needs `pytz` (the D-014 hazard) and large results never enter process memory. Schema,
+row count, and preview are then read back from that Parquet. The preview casts every
+column to `VARCHAR` *in SQL*, special-casing `TIMESTAMP WITH TIME ZONE` via
+`AT TIME ZONE 'UTC'`, so previews are identical regardless of the host session
+timezone and still require no `pytz`. The preview is bounded twice (SECURITY.md,
+threat 3): ≤ 50 rows and ≤ 4 KB, with every cell run through `sanitize_text` and
+pipes escaped so dataset content cannot break the markdown table. Failed executions
+are recorded as `error` artifacts — an execution that errored is still a receipt.
+
+## D-021 (2026-06-15) — Untrusted-text neutralization is structural, not phrase-matching
+
+`sanitize_text` does not try to *detect* prompt injection ("ignore previous
+instructions"); a denylist of phrases is unreliable theater, which Veritas exists to
+avoid. Instead it removes the ability of dataset/execution-derived text to *break its
+framing*: every Unicode control/format character is dropped (NUL, C1, zero-width,
+bidi overrides), newlines/tabs become visible escapes, and the value is hard-capped.
+The text can still *say* anything; it can no longer forge a new line, hide characters,
+or exceed its cell. This is the M2 realization of D-008/D-012's deferred "sanitization
+is M2's job".
+
+## D-022 (2026-06-15) — `run_python` containment model and its honest limits
+
+Model-written Python runs behind five layers: (1) a static AST gate in the *parent*
+(`security.check_python_source`) — import whitelist, no relative imports, and a
+denylist of escape-shaped builtins/dunder attributes — so policy violations never
+spawn a process; (2) a separate subprocess; (3) resource limits via `setrlimit`
+(`RLIMIT_CPU` is reliable; `RLIMIT_AS` is best-effort — macOS rejects it, so the
+parent's wall-clock `subprocess` timeout is the real backstop); (4) network egress
+neutralized by replacing the `socket` entry points with raisers (defense in depth:
+whitelisted libraries like pandas can still open sockets); (5) an ephemeral working
+dir with only the requested datasets present, exported as Parquet and handed in as
+DataFrames (`df` when exactly one, plus a `datasets` map). The full result frame and
+figures persist as artifacts; only a bounded preview and capped stdout return.
+
+Honest limit: this is containment, not a jail. Without OS-level sandboxing
+(containers/seccomp, out of scope for a pip-installable tool), a whitelisted library
+can still *read* local files (`pd.read_csv('/etc/passwd')`); that is mitigated — not
+eliminated — by no network egress and bounded output, and is documented in
+SECURITY.md as residual risk. The child is split into importable functions
+(`block_network`, `apply_limits`, `load_datasets`, `run_in_namespace`) so the
+security-relevant logic is unit-tested in-process; only `main` runs solely in the
+subprocess (and is excluded from coverage), with an end-to-end test exercising the
+real subprocess wiring.
+
+## D-023 (2026-06-15) — Artifact store lives in the session, mirroring datasets
+
+`ArtifactRecord` and its registry sit in `session.py` next to `DatasetRecord` (the
+module's docstring anticipated "artifacts (M2)"), persisted as
+`artifacts/<artifact_id>.json` with the full result at `artifacts/<id>.parquet` and
+figures at `artifacts/<id>_fig<n>.png`. Execution modules build the record and call
+`session.register_artifact`, exactly as ingest builds a `DatasetRecord` and calls
+`register_dataset` — one owner of session state, reloaded by `InvestigationSession.open`.

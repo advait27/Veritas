@@ -27,7 +27,7 @@ Claude does the orchestration and deterministic Python does the rigor:
 | --- | --- | --- |
 | M0 | Project scaffold, CI, license, docs skeleton | ✅ done |
 | M1 | Ingest (CSV/Parquet/Excel → DuckDB) + profiling | ✅ done |
-| M2 | SQL/Python execution sandbox + artifact store | ⬜ |
+| M2 | SQL/Python execution sandbox + artifact store | ✅ done |
 | M3 | Findings registry + deterministic claim verification | ⬜ |
 | M4 | Discovery probes + FDR suppression | ⬜ |
 | M5 | MCP server wiring (stdio), `uvx` entry point | ⬜ |
