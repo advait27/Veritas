@@ -21,6 +21,7 @@ DEFAULT_SESSIONS_BASE_DIR = Path(".veritas-sessions")
 
 SourceFormat = Literal["csv", "parquet", "xlsx"]
 ArtifactKind = Literal["sql", "python"]
+FindingStatus = Literal["unverified", "verified", "refuted"]
 
 
 def new_id(prefix: str) -> str:
@@ -143,6 +144,46 @@ class UnknownArtifactError(KeyError):
     """Raised when an ``artifact_id`` is not present in the session registry."""
 
 
+class NumericClaim(BaseModel):
+    """One numeric assertion in a finding, pinned to a cell in an executed artifact.
+
+    The cell is located by ``column`` plus an optional ``where`` map of
+    ``column -> value`` equality filters (matched as text, so types never matter); with
+    no filters the artifact result must be a single row. This keyed lookup is order-free
+    and therefore deterministic — unlike a positional row index, which DuckDB's parallel
+    Parquet reader could reorder. ``value`` is the claimed number, compared to the cell
+    with :func:`math.isclose` using ``rel_tol``/``abs_tol``.
+    """
+
+    description: str
+    artifact_id: str
+    column: str
+    where: dict[str, str] = Field(default_factory=dict)
+    value: float
+    rel_tol: float = 1e-9
+    abs_tol: float = 1e-12
+
+
+class Finding(BaseModel):
+    """A claim destined for a report, with the numeric claims that back it.
+
+    Only a finding whose every :class:`NumericClaim` matches its artifact may be
+    reported (``status == 'verified'``); verification is deterministic Python over the
+    persisted artifacts, never an LLM judgement (see :mod:`veritas.findings`).
+    """
+
+    finding_id: str
+    headline: str
+    detail: str = ""
+    claims: list[NumericClaim] = Field(default_factory=list)
+    created_at: datetime
+    status: FindingStatus = "unverified"
+
+
+class UnknownFindingError(KeyError):
+    """Raised when a ``finding_id`` is not present in the session registry."""
+
+
 class InvestigationSession:
     """Owns the session directory, its DuckDB database, and the dataset registry.
 
@@ -168,11 +209,14 @@ class InvestigationSession:
         self._datasets_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir = self.session_dir / "artifacts"
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        self._findings_dir = self.session_dir / "findings"
+        self._findings_dir.mkdir(parents=True, exist_ok=True)
         self.conn: duckdb.DuckDBPyConnection = duckdb.connect(
             str(self.session_dir / "session.duckdb")
         )
         self._datasets: dict[str, DatasetRecord] = {}
         self._artifacts: dict[str, ArtifactRecord] = {}
+        self._findings: dict[str, Finding] = {}
 
     @classmethod
     def open(cls, session_dir: Path) -> InvestigationSession:
@@ -188,6 +232,9 @@ class InvestigationSession:
         for art_path in sorted(session.artifacts_dir.glob("*.json")):
             artifact = ArtifactRecord.model_validate_json(art_path.read_text(encoding="utf-8"))
             session._artifacts[artifact.artifact_id] = artifact
+        for finding_path in sorted(session._findings_dir.glob("*.json")):
+            finding = Finding.model_validate_json(finding_path.read_text(encoding="utf-8"))
+            session._findings[finding.finding_id] = finding
         return session
 
     def register_dataset(self, record: DatasetRecord) -> None:
@@ -257,6 +304,43 @@ class InvestigationSession:
             ``[record.artifact_id for record in session.list_artifacts()]``
         """
         return sorted(self._artifacts.values(), key=lambda r: (r.created_at, r.artifact_id))
+
+    def register_finding(self, finding: Finding) -> None:
+        """Add (or replace) a finding in the registry and persist it as JSON.
+
+        Re-registering the same ``finding_id`` overwrites it — that is how
+        :func:`veritas.findings.verify_finding` records a status change.
+
+        Example:
+            ``session.register_finding(finding)`` writes ``findings/<finding_id>.json``.
+        """
+        self._findings[finding.finding_id] = finding
+        meta_path = self._findings_dir / f"{finding.finding_id}.json"
+        meta_path.write_text(finding.model_dump_json(indent=2), encoding="utf-8")
+
+    def get_finding(self, finding_id: str) -> Finding:
+        """Look up a finding by id.
+
+        Example:
+            ``session.get_finding("fnd_1f2e3d4c5b6a").status``
+
+        Raises:
+            UnknownFindingError: if the id was never registered in this session.
+        """
+        try:
+            return self._findings[finding_id]
+        except KeyError:
+            known = ", ".join(sorted(self._findings)) or "none"
+            msg = f"unknown finding_id {finding_id!r} (known: {known})"
+            raise UnknownFindingError(msg) from None
+
+    def list_findings(self) -> list[Finding]:
+        """Return all registered findings, oldest first.
+
+        Example:
+            ``[f.finding_id for f in session.list_findings() if f.status == "verified"]``
+        """
+        return sorted(self._findings.values(), key=lambda f: (f.created_at, f.finding_id))
 
     def close(self) -> None:
         """Close the DuckDB connection (the session directory stays on disk)."""

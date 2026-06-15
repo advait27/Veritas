@@ -15,10 +15,13 @@ from veritas.session import (
     ArtifactRecord,
     ColumnSchema,
     DatasetRecord,
+    Finding,
     InvestigationSession,
+    NumericClaim,
     SchemaRecord,
     UnknownArtifactError,
     UnknownDatasetError,
+    UnknownFindingError,
     new_id,
     quote_identifier,
 )
@@ -58,6 +61,15 @@ def _artifact(artifact_id: str = "art_abc123abc123") -> ArtifactRecord:
         column_types=["INTEGER"],
         data_path="artifacts/art_abc123abc123.parquet",
         preview="| n |\n| --- |\n| 1 |",
+    )
+
+
+def _finding(finding_id: str = "fnd_abc123abc123") -> Finding:
+    return Finding(
+        finding_id=finding_id,
+        headline="6 rows",
+        claims=[NumericClaim(description="n", artifact_id="art_x", column="n", value=6.0)],
+        created_at=datetime(2026, 6, 15, 12, 0, tzinfo=UTC),
     )
 
 
@@ -135,6 +147,39 @@ def test_open_reloads_artifacts(tmp_path: Path) -> None:
     reopened = InvestigationSession.open(session_dir)
     try:
         assert reopened.get_artifact(record.artifact_id) == record
+    finally:
+        reopened.close()
+
+
+def test_finding_register_get_list_and_persistence(session: InvestigationSession) -> None:
+    record = _finding()
+    session.register_finding(record)
+    assert session.get_finding(record.finding_id) == record
+    assert session.list_findings() == [record]
+    meta_path = session.session_dir / "findings" / f"{record.finding_id}.json"
+    assert Finding.model_validate_json(meta_path.read_text()) == record
+
+
+def test_register_finding_overwrites_status(session: InvestigationSession) -> None:
+    session.register_finding(_finding())
+    session.register_finding(_finding().model_copy(update={"status": "verified"}))
+    assert session.get_finding("fnd_abc123abc123").status == "verified"
+
+
+def test_get_unknown_finding_raises(session: InvestigationSession) -> None:
+    session.register_finding(_finding())
+    with pytest.raises(UnknownFindingError, match=r"fnd_missing.*fnd_abc123abc123"):
+        session.get_finding("fnd_missing")
+
+
+def test_open_reloads_findings(tmp_path: Path) -> None:
+    record = _finding()
+    with InvestigationSession(base_dir=tmp_path) as session:
+        session.register_finding(record)
+        session_dir = session.session_dir
+    reopened = InvestigationSession.open(session_dir)
+    try:
+        assert reopened.get_finding(record.finding_id) == record
     finally:
         reopened.close()
 
