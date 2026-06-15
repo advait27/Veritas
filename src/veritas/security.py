@@ -63,6 +63,11 @@ def sanitize_text(value: object, *, cap: int = CELL_TEXT_CAP) -> str:
         msg = f"cap must be positive, got {cap}"
         raise ValueError(msg)
     text = str(value)
+    # Every character that can forge a new logical line becomes a visible "\n": ASCII
+    # CR/LF, vertical tab and form feed, and the Unicode line/paragraph separators
+    # (U+2028/U+2029, categories Zl/Zp — *not* dropped by the C-category filter below).
+    for code in (0x0B, 0x0C, 0x2028, 0x2029):  # VT, FF, line/para separators
+        text = text.replace(chr(code), "\n")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace("\n", "\\n").replace("\t", " ")
     # Drop every Unicode control/format char (C0, C1, NUL, zero-width, bidi overrides);
@@ -70,7 +75,7 @@ def sanitize_text(value: object, *, cap: int = CELL_TEXT_CAP) -> str:
     text = "".join(ch for ch in text if not unicodedata.category(ch).startswith("C"))
     text = re.sub(r" {2,}", " ", text).strip()
     if len(text) > cap:
-        text = text[: max(cap - 1, 1)].rstrip() + "…"
+        text = text[: cap - 1].rstrip() + "…"
     return text
 
 
@@ -121,9 +126,11 @@ _SQL_FORBIDDEN_FUNCTIONS = frozenset(
         "parquet_scan",
         "read_json",
         "read_json_auto",
+        "read_json_objects",
+        "read_json_objects_auto",
         "read_ndjson",
         "read_ndjson_auto",
-        "read_json_objects",
+        "read_ndjson_objects",
         "read_text",
         "read_blob",
         "glob",
@@ -131,33 +138,100 @@ _SQL_FORBIDDEN_FUNCTIONS = frozenset(
         "parquet_metadata",
         "parquet_schema",
         "parquet_file_metadata",
+        "parquet_full_metadata",
         "parquet_kv_metadata",
+        "parquet_bloom_probe",
         "csv_sniff",
         "delta_scan",
         "iceberg_scan",
+        "iceberg_metadata",
+        "iceberg_snapshots",
+        "arrow_scan",
+        "read_arrow",
+        "shapefile_meta",
+        "st_read",
+        "st_read_meta",
         "read_xlsx",
     }
 )
 """Table/scalar functions that read the filesystem or network; denied in run_sql."""
 
-_COMMENT_RE = re.compile(r"--[^\n]*|/\*.*?\*/", re.DOTALL)
 _FUNCTION_CALL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_STRING_SENTINEL = "\x00"  # marks where a single-quoted string literal stood
+_TABLE_SOURCE_STRING_RE = re.compile(rf"(?i)\b(?:from|join)\s+{_STRING_SENTINEL}")
+# A string literal that looks like a file path/URL — i.e. would trigger a DuckDB
+# replacement-scan read. Matched either by a path-like start (``/``, ``./``, ``~``,
+# ``C:\``, ``\\``) or by a data-file extension at the end.
+_PATH_LITERAL_RE = re.compile(
+    r"(?i)^\s*(?:~|\.{0,2}/|[a-z]:[\\/]|\\\\)"
+    r"|\.(?:csv|tsv|psv|parquet|pq|json|jsonl|ndjson|xlsx|xls|arrow"
+    r"|feather|orc|avro|db|duckdb|sqlite|wal)\s*$"
+)
 
 
-def _strip_sql_comments(sql: str) -> str:
-    """Remove ``--`` line comments and ``/* */`` block comments from SQL text."""
-    return _COMMENT_RE.sub(" ", sql)
+def _read_quoted(sql: str, start: int, quote: str) -> tuple[str, int]:
+    """Read a quoted token from its opening quote; a doubled quote ('' or "") escapes it."""
+    index, length = start + 1, len(sql)
+    buffer: list[str] = []
+    while index < length:
+        if sql[index] == quote:
+            if index + 1 < length and sql[index + 1] == quote:
+                buffer.append(quote)
+                index += 2
+                continue
+            return "".join(buffer), index + 1
+        buffer.append(sql[index])
+        index += 1
+    return "".join(buffer), index  # unterminated quote: treat the remainder as content
+
+
+def _normalize_sql(sql: str) -> tuple[str, list[str]]:
+    """Strip comments and blank string literals, *ignoring* markers that sit inside strings.
+
+    A naive regex strip treats a ``--`` or ``/*`` that appears inside a string literal as a
+    real comment and deletes the call hidden after it, defeating the keyword/function scans
+    (e.g. ``SELECT '/*' AS m, * FROM read_csv('x')``). This char-level pass instead tracks
+    string and identifier quoting, so it returns the SQL with comments removed, every
+    single-quoted string replaced by a NUL sentinel, and double-quoted identifiers reduced
+    to bare (space-padded) text — plus the list of string-literal contents for path checks.
+    """
+    out: list[str] = []
+    literals: list[str] = []
+    index, length = 0, len(sql)
+    while index < length:
+        char = sql[index]
+        if char == "'":
+            content, index = _read_quoted(sql, index, "'")
+            literals.append(content)
+            out.append(_STRING_SENTINEL)
+        elif char == '"':
+            content, index = _read_quoted(sql, index, '"')
+            out.append(f" {content} ")
+        elif char == "-" and index + 1 < length and sql[index + 1] == "-":
+            end = sql.find("\n", index)
+            index = length if end == -1 else end
+        elif char == "/" and index + 1 < length and sql[index + 1] == "*":
+            end = sql.find("*/", index + 2)
+            index = length if end == -1 else end + 2
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out), literals
 
 
 def validate_select(conn: duckdb.DuckDBPyConnection, sql: str) -> str:
     """Validate that ``sql`` is a single, read-only ``SELECT`` and return it stripped.
 
-    Three layers, all deterministic: DuckDB's parser must see exactly one statement of
-    type ``SELECT``; the first keyword must not be a settings/DDL/DML/transaction verb
-    (DuckDB classifies ``PRAGMA``/``CALL`` as ``SELECT``, so a keyword guard is needed);
-    and no filesystem/network table function (``read_csv``, ``read_parquet``, ``glob``,
-    …) may appear. Comments are stripped before the keyword and function scans.
+    Layers, all deterministic, over a string/comment-aware normalization of the SQL
+    (:func:`_normalize_sql`, so a call cannot be smuggled inside a string or comment):
+    DuckDB's parser must see exactly one statement of type ``SELECT``; the first keyword
+    must not be a settings/DDL/DML/transaction verb (DuckDB classifies ``PRAGMA``/``CALL``
+    as ``SELECT``); no filesystem/network table function may appear; and no string literal
+    may sit in table-source position or look like a file path — both of which trigger
+    DuckDB's *replacement scan*, a file read with no ``read_csv`` token (DECISIONS.md,
+    D-019/D-024). This is a denylist hardened against grammar tricks, not an
+    engine-enforced jail; see D-024 for the residual risk and the deferred engine fix.
 
     Args:
         conn: a DuckDB connection used only to *parse* (never execute) the statement.
@@ -168,7 +242,7 @@ def validate_select(conn: duckdb.DuckDBPyConnection, sql: str) -> str:
 
     Raises:
         UnsafeSqlError: if the statement is empty, multiple, non-SELECT, leads with a
-            denied keyword, or references a denied function.
+            denied keyword, references a denied function, or uses a file-path string.
 
     Example:
         >>> import duckdb
@@ -191,15 +265,22 @@ def validate_select(conn: duckdb.DuckDBPyConnection, sql: str) -> str:
         msg = f"only SELECT queries are allowed, got {statements[0].type.name}"
         raise UnsafeSqlError(msg)
 
-    decommented = _strip_sql_comments(stripped)
-    first = _IDENTIFIER_RE.search(decommented)
+    normalized, literals = _normalize_sql(stripped)
+    first = _IDENTIFIER_RE.search(normalized)
     if first is not None and first.group(0).lower() in _SQL_LEADING_KEYWORD_DENYLIST:
         msg = f"statement keyword {first.group(0).upper()!r} is not allowed in run_sql"
         raise UnsafeSqlError(msg)
-    for match in _FUNCTION_CALL_RE.finditer(decommented):
+    for match in _FUNCTION_CALL_RE.finditer(normalized):
         name = match.group(1).lower()
         if name in _SQL_FORBIDDEN_FUNCTIONS:
             msg = f"function {name!r} reads the filesystem or network and is not allowed"
+            raise UnsafeSqlError(msg)
+    if _TABLE_SOURCE_STRING_RE.search(normalized):
+        msg = "a string literal cannot be a table source (file read via replacement scan)"
+        raise UnsafeSqlError(msg)
+    for literal in literals:
+        if _PATH_LITERAL_RE.search(literal):
+            msg = f"string literal {literal[:60]!r} looks like a file path and is not allowed"
             raise UnsafeSqlError(msg)
     return stripped
 
@@ -243,7 +324,26 @@ PYTHON_IMPORT_WHITELIST = frozenset(
 """Root modules a sandboxed script may import; everything else is denied."""
 
 _FORBIDDEN_NAMES = frozenset(
-    {"eval", "exec", "compile", "__import__", "open", "input", "breakpoint", "exit", "quit"}
+    {
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "__builtins__",
+        "open",
+        "input",
+        "breakpoint",
+        "exit",
+        "quit",
+        # introspection/escape enablers: getattr with a runtime-built dunder string defeats
+        # the _FORBIDDEN_ATTRS check, and globals()/vars() reach the builtins/object graph.
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "locals",
+        "vars",
+    }
 )
 _FORBIDDEN_ATTRS = frozenset(
     {
