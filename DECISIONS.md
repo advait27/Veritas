@@ -250,3 +250,43 @@ module's docstring anticipated "artifacts (M2)"), persisted as
 figures at `artifacts/<id>_fig<n>.png`. Execution modules build the record and call
 `session.register_artifact`, exactly as ingest builds a `DatasetRecord` and calls
 `register_dataset` — one owner of session state, reloaded by `InvestigationSession.open`.
+
+## D-024 (2026-06-15) — M2 adversarial security review: fixes and the deferred engine boundary
+
+An adversarial review of the M2 gates found several real bypasses, now fixed and
+regression-tested:
+
+- **SQL comment-in-string bypass (critical).** The original comment strip was a regex
+  unaware of string literals, so `SELECT '/*' AS m, * FROM read_csv('x')` hid the
+  `read_csv` behind a "comment" that lived inside a string. Replaced with a char-level
+  tokenizer (`_normalize_sql`) that tracks string/identifier quoting before any scan.
+- **SQL replacement scans.** `SELECT * FROM '/etc/passwd'` reads a file with no
+  `read_csv` token. Now blocked by a table-source-string rule plus a path-looking
+  string-literal rule; the file-function denylist also gained the missing
+  `read_json_objects_auto`/`read_ndjson_objects`/… readers.
+- **Python `__builtins__`/`getattr` escapes.** `__builtins__['__import__']('os')` and
+  `getattr(x, '__' + 'globals__')` defeated the AST gate. Fixed by (a) denying
+  `getattr`/`setattr`/`delattr`/`globals`/`locals`/`vars`/`__builtins__` as names, and
+  (b) a runtime backstop: `run_in_namespace` now injects a restricted `__builtins__`
+  (no `eval`/`exec`/`open`/`getattr`…) with a guarded `__import__` that enforces the
+  whitelist at runtime — so the import whitelist is a real control, not just static.
+- **Network block completeness.** Patched the low-level `_socket` extension too, not
+  only the high-level `socket` module.
+- **Process-group kill.** The sandbox child runs with `start_new_session=True` and the
+  whole group is killed on timeout, so a forked/daemonized grandchild cannot outlive
+  the wall-clock backstop (the only enforced limit on macOS).
+- **Sanitization gaps.** `sanitize_text` now also escapes U+2028/U+2029 (Zl/Zp) and
+  VT/FF, and no longer overflows `cap` by one at `cap == 1`. Previews render a real SQL
+  `NULL` as `␀`, never the literal string `"NULL"`, so missing data is never conflated
+  with a cell whose value is the text `NULL`.
+
+**Deferred — the durable SQL boundary.** The honest fix for SQL file-reads is an
+engine-enforced read-only / `enable_external_access=false` connection, not a denylist.
+It is deferred because it does not compose with the current single-connection design:
+a second connection cannot attach the live session DB (`duckdb` raises a file-handle
+conflict), and a no-external-access connection cannot `write_parquet` the streamed
+result (D-020). Doing it properly means routing untrusted queries through a separate
+restricted instance fed via Arrow — an M1-ingest-touching change. Until then the SQL
+gate is a *hardened denylist*, not a jail: a future DuckDB file-reading function not on
+the denylist is the residual risk, bounded by the system having no network egress.
+Recorded so M5 (server) and any "warehouse connector" milestone revisit it.
