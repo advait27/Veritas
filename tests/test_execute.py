@@ -89,9 +89,11 @@ def test_run_sql_empty_result(loaded: InvestigationSession) -> None:
 
 
 def test_run_sql_null_and_pipe_rendering(loaded: InvestigationSession) -> None:
-    record = run_sql(loaded, "SELECT NULL AS a, 'x|y' AS b")
-    assert "NULL" in record.preview
+    record = run_sql(loaded, "SELECT NULL AS a, 'x|y' AS b, 'NULL' AS c")
+    assert "␀" in record.preview  # a real NULL renders as the null token
     assert "x\\|y" in record.preview  # the pipe is escaped, not a column break
+    # the literal string 'NULL' must NOT be conflated with a real NULL
+    assert record.preview.count("␀") == 1
 
 
 def test_run_sql_byte_cap_truncates_preview(loaded: InvestigationSession) -> None:

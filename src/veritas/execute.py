@@ -128,10 +128,18 @@ def _fetch_preview_rows(
     return [[_render_cell(value) for value in row] for row in raw]
 
 
+_NULL_TOKEN = "␀"  # U+2400; distinguishes a real SQL NULL from the string value "NULL"
+
+
 def _render_cell(value: object) -> str:
-    """Render one already-text-cast cell: NULLs explicit, pipes escaped, text sanitized."""
+    """Render one already-text-cast cell: NULLs explicit, pipes escaped, text sanitized.
+
+    A real SQL ``NULL`` renders as ``␀`` (not the literal text ``NULL``), so a column
+    whose value is genuinely the string ``"NULL"`` is never conflated with missing data —
+    the kind of silently-wrong reading Veritas exists to prevent.
+    """
     if value is None:
-        return "NULL"
+        return _NULL_TOKEN
     return sanitize_text(value).replace("|", "\\|")
 
 
@@ -150,13 +158,21 @@ def _render_table(columns: list[str], rows: list[list[str]], row_count: int) -> 
     return _cap_bytes("\n".join(lines), PREVIEW_BYTE_CAP)
 
 
+_TRUNCATION_MARKER = "\n_…(preview truncated)_"
+
+
 def _cap_bytes(text: str, cap: int) -> str:
-    """Truncate ``text`` to at most ``cap`` UTF-8 bytes on a character boundary."""
+    """Truncate ``text`` to at most ``cap`` total UTF-8 bytes, marker included.
+
+    Room for the truncation marker is reserved *inside* ``cap`` so the returned string
+    never exceeds the documented bound.
+    """
     encoded = text.encode("utf-8")
     if len(encoded) <= cap:
         return text
-    truncated = encoded[:cap].decode("utf-8", errors="ignore").rstrip()
-    return truncated + "\n_…(preview truncated)_"
+    budget = max(cap - len(_TRUNCATION_MARKER.encode("utf-8")), 0)
+    truncated = encoded[:budget].decode("utf-8", errors="ignore").rstrip()
+    return truncated + _TRUNCATION_MARKER
 
 
 def _register_error(
