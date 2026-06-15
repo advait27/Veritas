@@ -14,12 +14,13 @@ from types import TracebackType
 from typing import Literal
 
 import duckdb
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 DEFAULT_SESSIONS_BASE_DIR = Path(".veritas-sessions")
 """Default parent directory for session directories, relative to the working directory."""
 
 SourceFormat = Literal["csv", "parquet", "xlsx"]
+ArtifactKind = Literal["sql", "python"]
 
 
 def new_id(prefix: str) -> str:
@@ -110,8 +111,36 @@ class DatasetRecord(BaseModel):
     schema_record: SchemaRecord
 
 
+class ArtifactRecord(BaseModel):
+    """Metadata for one execution artifact: the receipt for a ``run_sql``/``run_python``.
+
+    Every execution — successful or failed — is recorded so that later milestones can
+    verify numeric claims against it (M3). ``data_path``/``figure_paths`` are paths
+    relative to the session directory; the full result lives only on disk (the
+    ``preview`` is a bounded, sanitized excerpt for model context).
+    """
+
+    artifact_id: str
+    kind: ArtifactKind
+    created_at: datetime
+    source: str
+    status: Literal["ok", "error"]
+    row_count: int | None = None
+    columns: list[str] = Field(default_factory=list)
+    column_types: list[str] = Field(default_factory=list)
+    data_path: str | None = None
+    figure_paths: list[str] = Field(default_factory=list)
+    stdout: str | None = None
+    error: str | None = None
+    preview: str = ""
+
+
 class UnknownDatasetError(KeyError):
     """Raised when a ``dataset_id`` is not present in the session registry."""
+
+
+class UnknownArtifactError(KeyError):
+    """Raised when an ``artifact_id`` is not present in the session registry."""
 
 
 class InvestigationSession:
@@ -137,10 +166,13 @@ class InvestigationSession:
         self.session_dir = base / self.session_id
         self._datasets_dir = self.session_dir / "datasets"
         self._datasets_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir = self.session_dir / "artifacts"
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.conn: duckdb.DuckDBPyConnection = duckdb.connect(
             str(self.session_dir / "session.duckdb")
         )
         self._datasets: dict[str, DatasetRecord] = {}
+        self._artifacts: dict[str, ArtifactRecord] = {}
 
     @classmethod
     def open(cls, session_dir: Path) -> InvestigationSession:
@@ -153,6 +185,9 @@ class InvestigationSession:
         for meta_path in sorted(session._datasets_dir.glob("*.json")):
             record = DatasetRecord.model_validate_json(meta_path.read_text(encoding="utf-8"))
             session._datasets[record.dataset_id] = record
+        for art_path in sorted(session.artifacts_dir.glob("*.json")):
+            artifact = ArtifactRecord.model_validate_json(art_path.read_text(encoding="utf-8"))
+            session._artifacts[artifact.artifact_id] = artifact
         return session
 
     def register_dataset(self, record: DatasetRecord) -> None:
@@ -188,6 +223,40 @@ class InvestigationSession:
             ``[record.dataset_id for record in session.list_datasets()]``
         """
         return sorted(self._datasets.values(), key=lambda r: (r.ingested_at, r.dataset_id))
+
+    def register_artifact(self, record: ArtifactRecord) -> None:
+        """Add an execution artifact to the registry and persist its metadata as JSON.
+
+        Example:
+            ``session.register_artifact(record)`` writes ``artifacts/<artifact_id>.json``.
+        """
+        self._artifacts[record.artifact_id] = record
+        meta_path = self.artifacts_dir / f"{record.artifact_id}.json"
+        meta_path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
+
+    def get_artifact(self, artifact_id: str) -> ArtifactRecord:
+        """Look up an execution artifact by id.
+
+        Example:
+            ``session.get_artifact("art_1f2e3d4c5b6a").row_count``
+
+        Raises:
+            UnknownArtifactError: if the id was never registered in this session.
+        """
+        try:
+            return self._artifacts[artifact_id]
+        except KeyError:
+            known = ", ".join(sorted(self._artifacts)) or "none"
+            msg = f"unknown artifact_id {artifact_id!r} (known: {known})"
+            raise UnknownArtifactError(msg) from None
+
+    def list_artifacts(self) -> list[ArtifactRecord]:
+        """Return all registered artifacts, oldest first.
+
+        Example:
+            ``[record.artifact_id for record in session.list_artifacts()]``
+        """
+        return sorted(self._artifacts.values(), key=lambda r: (r.created_at, r.artifact_id))
 
     def close(self) -> None:
         """Close the DuckDB connection (the session directory stays on disk)."""

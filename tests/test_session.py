@@ -12,10 +12,12 @@ import pytest
 from veritas.ingest import ingest_file
 from veritas.profile import profile_dataset
 from veritas.session import (
+    ArtifactRecord,
     ColumnSchema,
     DatasetRecord,
     InvestigationSession,
     SchemaRecord,
+    UnknownArtifactError,
     UnknownDatasetError,
     new_id,
     quote_identifier,
@@ -41,6 +43,21 @@ def _record(dataset_id: str = "ds_abc123abc123", table: str = "t") -> DatasetRec
                 )
             ]
         ),
+    )
+
+
+def _artifact(artifact_id: str = "art_abc123abc123") -> ArtifactRecord:
+    return ArtifactRecord(
+        artifact_id=artifact_id,
+        kind="sql",
+        created_at=datetime(2026, 6, 14, 12, 0, tzinfo=UTC),
+        source="SELECT 1",
+        status="ok",
+        row_count=1,
+        columns=["n"],
+        column_types=["INTEGER"],
+        data_path="artifacts/art_abc123abc123.parquet",
+        preview="| n |\n| --- |\n| 1 |",
     )
 
 
@@ -85,6 +102,41 @@ def test_list_datasets_sorted_oldest_first(session: InvestigationSession) -> Non
     session.register_dataset(newer)
     session.register_dataset(older)
     assert [r.dataset_id for r in session.list_datasets()] == ["ds_a", "ds_b"]
+
+
+def test_artifact_register_get_list_and_persistence(session: InvestigationSession) -> None:
+    record = _artifact()
+    session.register_artifact(record)
+    assert session.get_artifact(record.artifact_id) == record
+    assert session.list_artifacts() == [record]
+    meta_path = session.artifacts_dir / f"{record.artifact_id}.json"
+    assert ArtifactRecord.model_validate_json(meta_path.read_text()) == record
+
+
+def test_get_unknown_artifact_raises(session: InvestigationSession) -> None:
+    session.register_artifact(_artifact())
+    with pytest.raises(UnknownArtifactError, match=r"art_missing.*art_abc123abc123"):
+        session.get_artifact("art_missing")
+
+
+def test_list_artifacts_sorted_oldest_first(session: InvestigationSession) -> None:
+    newer = _artifact("art_b").model_copy(update={"created_at": datetime(2026, 6, 15, tzinfo=UTC)})
+    older = _artifact("art_a")
+    session.register_artifact(newer)
+    session.register_artifact(older)
+    assert [r.artifact_id for r in session.list_artifacts()] == ["art_a", "art_b"]
+
+
+def test_open_reloads_artifacts(tmp_path: Path) -> None:
+    record = _artifact()
+    with InvestigationSession(base_dir=tmp_path) as session:
+        session.register_artifact(record)
+        session_dir = session.session_dir
+    reopened = InvestigationSession.open(session_dir)
+    try:
+        assert reopened.get_artifact(record.artifact_id) == record
+    finally:
+        reopened.close()
 
 
 def test_open_reloads_registry_and_tables(tmp_path: Path) -> None:
