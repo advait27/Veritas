@@ -290,3 +290,32 @@ restricted instance fed via Arrow — an M1-ingest-touching change. Until then t
 gate is a *hardened denylist*, not a jail: a future DuckDB file-reading function not on
 the denylist is the residual risk, bounded by the system having no network egress.
 Recorded so M5 (server) and any "warehouse connector" milestone revisit it.
+
+## D-025 (2026-06-15) — Claims pin a value by keyed lookup, not by row index (M3)
+
+A `NumericClaim` locates the cell it asserts by `column` plus an optional `where` map of
+`column = value` equality filters (matched as text via `CAST(... AS VARCHAR)`, so the
+filter never depends on a column's type), and exactly one row must match. A positional
+row index was rejected: DuckDB's parallel Parquet reader does not guarantee row order
+on read-back, so "row 3" would be non-deterministic, and verification must be
+deterministic. Keyed lookup is also how an analyst thinks ("the mean *for category A*",
+not "row 3"). A claim with no `where` therefore requires a single-row (scalar) artifact;
+zero or many matches is an unverifiable claim, reported as such. The cell is coerced to
+a finite float (DECIMAL and numeric strings included; booleans, NULLs, and ±inf/NaN are
+*not* numbers) and compared with `math.isclose`.
+
+## D-026 (2026-06-15) — Verification = claims match artifacts AND prose is fully backed
+
+`verify_finding` is deterministic Python (never an LLM judge, per the spec). A finding
+is `verified` only if (a) every claim's value matches the value re-read from its
+artifact's Parquet, and (b) every numeric literal in the finding's prose (headline +
+detail) is backed by a claim. Coverage (b) is the teeth behind "every numeric claim must
+trace to an executed artifact": a number is backed when some claim's value, *rounded to
+the literal's displayed precision*, equals it (so a claim of `9.583` backs the prose
+`9.58`); percent/currency markers and thousands commas are stripped first, so a
+percentage is claimed in percent units (`23%` ← a claim value of `23`). This is
+deliberately strict and fail-closed — an unbacked number (even a year or an id written
+numerically) refuses verification rather than risk emitting an untraceable figure, which
+is exactly the failure mode Veritas exists to prevent; the M7 methodology guides
+phrasing so every figure is a real claim. A finding with no numbers and no claims is
+vacuously verified — it makes no numeric assertions to refute.
