@@ -7,6 +7,7 @@ loading, and execution paths are all covered without a subprocess round-trip.
 
 from __future__ import annotations
 
+import _socket
 import resource
 import socket
 import sys
@@ -19,27 +20,60 @@ import pandas as pd
 import pytest
 
 from veritas._sandbox_child import (
+    _RAW_SOCKET_ENTRY_POINTS,
+    _SOCKET_ENTRY_POINTS,
     _save_figures,
     apply_limits,
     block_network,
     load_datasets,
     run_in_namespace,
+    safe_builtins,
 )
 
 matplotlib.use("Agg")
 
 
 def test_block_network_blocks_sockets_and_connections() -> None:
-    saved = {name: getattr(socket, name) for name in ("socket", "create_connection", "getaddrinfo")}
+    saved = {name: getattr(socket, name) for name in _SOCKET_ENTRY_POINTS}
+    saved_raw = {n: getattr(_socket, n) for n in _RAW_SOCKET_ENTRY_POINTS if hasattr(_socket, n)}
     try:
         block_network()
         with pytest.raises(OSError, match="network access is disabled"):
             socket.create_connection(("127.0.0.1", 80))
         with pytest.raises(OSError, match="network access is disabled"):
             socket.socket()
+        # the low-level extension the socket module is built on must also be blocked
+        with pytest.raises(OSError, match="network access is disabled"):
+            _socket.socket()
     finally:
         for name, value in saved.items():
             setattr(socket, name, value)
+        for name, value in saved_raw.items():
+            setattr(_socket, name, value)
+
+
+def test_safe_builtins_removes_dangerous_and_guards_import() -> None:
+    builtins_map = safe_builtins()
+    for unsafe in ("open", "eval", "exec", "getattr", "globals"):
+        assert unsafe not in builtins_map
+    assert "len" in builtins_map and "print" in builtins_map
+    guarded_import = builtins_map["__import__"]
+    assert guarded_import("math").__name__ == "math"  # whitelisted import works
+    with pytest.raises(ImportError, match="not allowed"):
+        guarded_import("os")  # non-whitelisted import is refused at runtime
+
+
+def test_run_in_namespace_blocks_builtins_escape(tmp_path: Path) -> None:
+    # even reaching __builtins__ directly cannot import os, because the guarded
+    # __import__ enforces the whitelist
+    manifest = run_in_namespace(
+        "result = __builtins__['__import__']('os').getcwd()",
+        {},
+        str(tmp_path / "r.parquet"),
+        str(tmp_path),
+    )
+    assert manifest["status"] == "error"
+    assert "not allowed" in manifest["error"]
 
 
 def test_apply_limits_executes_all_branches() -> None:

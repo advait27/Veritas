@@ -13,6 +13,8 @@ unit-tested in-process; only :func:`main` runs solely inside the subprocess.
 
 from __future__ import annotations
 
+import _socket
+import builtins
 import contextlib
 import io
 import json
@@ -26,9 +28,22 @@ from typing import Any, NoReturn
 import duckdb
 import pandas as pd
 
+from veritas.security import PYTHON_IMPORT_WHITELIST
+
 NETWORK_DISABLED_MESSAGE = "network access is disabled in the Veritas sandbox"
 
-_SOCKET_ENTRY_POINTS = ("socket", "create_connection", "getaddrinfo", "socketpair")
+# Patched on both the high-level `socket` module and the low-level `_socket` extension it
+# is built on — patching only `socket` leaves `_socket.socket`/`fromfd` as live egress.
+_SOCKET_ENTRY_POINTS = (
+    "socket",
+    "SocketType",
+    "create_connection",
+    "getaddrinfo",
+    "socketpair",
+    "fromfd",
+    "dup",
+)
+_RAW_SOCKET_ENTRY_POINTS = ("socket", "fromfd", "dup")
 
 
 def block_network() -> None:
@@ -36,7 +51,8 @@ def block_network() -> None:
 
     Defense in depth behind the import whitelist: a whitelisted library (e.g. pandas
     reading a URL) could still open a socket, so socket creation, outbound connection,
-    and name resolution are all neutralized at the ``socket`` module level.
+    and name resolution are neutralized on both the high-level ``socket`` module and the
+    low-level ``_socket`` C extension it is built on.
 
     Example:
         >>> block_network()
@@ -49,8 +65,65 @@ def block_network() -> None:
     def _blocked(*_args: object, **_kwargs: object) -> NoReturn:
         raise OSError(NETWORK_DISABLED_MESSAGE)
 
-    for name in _SOCKET_ENTRY_POINTS:
+    for name in _SOCKET_ENTRY_POINTS:  # all present on the high-level socket module
         setattr(socket, name, _blocked)
+    for name in _RAW_SOCKET_ENTRY_POINTS:  # _socket is leaner; only patch what it exposes
+        if hasattr(_socket, name):
+            setattr(_socket, name, _blocked)
+
+
+_UNSAFE_BUILTINS = frozenset(
+    {
+        "eval",
+        "exec",
+        "compile",
+        "open",
+        "input",
+        "breakpoint",
+        "exit",
+        "quit",
+        "help",
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "vars",
+        "memoryview",
+    }
+)
+
+
+def safe_builtins() -> dict[str, Any]:
+    """Return a restricted ``__builtins__`` mapping for the user namespace.
+
+    The runtime backstop to the parent's static AST gate: even if a script reaches its
+    own ``__builtins__`` (e.g. via a gadget the AST scan missed), the dangerous entries
+    are simply absent. ``open``/``eval``/``exec``/``getattr``/… are removed, and
+    ``__import__`` is replaced by a guard that enforces :data:`PYTHON_IMPORT_WHITELIST`
+    at runtime — so a whitelisted ``import pandas`` works while ``__import__('os')`` does
+    not. Already-imported libraries keep the real builtins via their own module globals,
+    so this only constrains the user code, not the analysis stack.
+
+    Example:
+        >>> "open" in safe_builtins()
+        False
+    """
+    safe = {
+        name: getattr(builtins, name)
+        for name in dir(builtins)
+        if not name.startswith("_") and name not in _UNSAFE_BUILTINS
+    }
+    safe["__build_class__"] = builtins.__build_class__  # needed for `class` statements
+
+    def _guarded_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        root = name.split(".", maxsplit=1)[0]
+        if root not in PYTHON_IMPORT_WHITELIST:
+            msg = f"import of {root!r} is not allowed in the sandbox"
+            raise ImportError(msg)
+        return builtins.__import__(name, *args, **kwargs)
+
+    safe["__import__"] = _guarded_import
+    return safe
 
 
 def apply_limits(cpu_seconds: int | None, memory_bytes: int | None) -> None:
@@ -131,6 +204,7 @@ def run_in_namespace(
         "figures": [],
         "result_repr": None,
     }
+    namespace["__builtins__"] = safe_builtins()  # runtime backstop to the static AST gate
     buffer = io.StringIO()
     try:
         with contextlib.redirect_stdout(buffer):
@@ -183,6 +257,7 @@ def _save_figures(figure_dir: Path) -> list[str]:
         path = figure_dir / f"fig_{index}.png"
         pyplot.figure(number).savefig(path)
         paths.append(str(path))
+    pyplot.close("all")  # leave no global figure state behind (self-contained)
     return paths
 
 

@@ -41,6 +41,27 @@ def test_run_python_df_is_the_single_dataset(loaded: InvestigationSession) -> No
     assert record.row_count == 6  # the trio fixture has 6 rows
 
 
+def test_run_python_no_df_when_multiple_datasets(
+    session: InvestigationSession, trio_paths: dict[str, Path]
+) -> None:
+    # D-022: `df` is bound only when exactly one dataset is loaded
+    ingest_file(session, trio_paths["csv"], name="a")
+    ingest_file(session, trio_paths["parquet"], name="b")
+    record = run_python(session, "result = df")
+    assert record.status == "error"
+    assert record.error is not None and "df" in record.error  # NameError, recorded cleanly
+    # the datasets map is always available and keyed by id
+    by_map = run_python(session, "result = next(iter(datasets.values()))")
+    assert by_map.status == "ok"
+    assert by_map.row_count == 6
+
+
+def test_run_python_no_df_when_no_datasets(session: InvestigationSession) -> None:
+    record = run_python(session, "result = datasets", dataset_ids=[])
+    assert record.status == "ok"
+    assert "{}" in record.preview  # empty datasets map, no df bound
+
+
 def test_run_python_captures_stdout(loaded: InvestigationSession) -> None:
     record = run_python(loaded, "print('rows', len(df))")
     assert record.status == "ok"

@@ -10,9 +10,11 @@ only a bounded, sanitized preview and capped stdout re-enter model context.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -131,23 +133,41 @@ def _run_child(
     }
     config_path = tmp / "config.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", _CHILD_MODULE, str(config_path)],
-            cwd=tmp,
-            env=_child_env(tmp),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
+    returncode, stderr, timed_out = _spawn_child(config_path, tmp, timeout_seconds)
+    if timed_out:
         return {
             "status": "error",
             "manifest": None,
             "error": f"execution exceeded the {timeout_seconds}s time limit",
         }
-    return _read_outcome(manifest_path, proc.returncode, proc.stderr)
+    return _read_outcome(manifest_path, returncode, stderr)
+
+
+def _spawn_child(config_path: Path, tmp: Path, timeout_seconds: int) -> tuple[int, str, bool]:
+    """Run the child in its own process group; on timeout kill the whole group.
+
+    ``start_new_session=True`` makes the child a session/group leader, so a script that
+    forked or daemonized cannot outlive the wall-clock timeout — the real backstop where
+    ``RLIMIT_AS``/``RLIMIT_CPU`` are unenforced (e.g. macOS).
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-m", _CHILD_MODULE, str(config_path)],
+        cwd=str(tmp),
+        env=_child_env(tmp),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _, stderr = proc.communicate(timeout=timeout_seconds)
+        return proc.returncode, stderr, False
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        proc.kill()
+        _, stderr = proc.communicate()
+        return proc.returncode, stderr or "", True
 
 
 def _read_outcome(manifest_path: Path, returncode: int, stderr: str) -> dict[str, Any]:
@@ -163,7 +183,11 @@ def _read_outcome(manifest_path: Path, returncode: int, stderr: str) -> dict[str
             ),
         }
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    return {"status": manifest["status"], "manifest": manifest, "error": manifest.get("error")}
+    return {
+        "status": manifest.get("status", "error"),
+        "manifest": manifest,
+        "error": manifest.get("error"),
+    }
 
 
 def _build_record(
@@ -185,9 +209,10 @@ def _build_record(
             status="error",
             error=sanitize_text(outcome["error"], cap=PREVIEW_BYTE_CAP),
         )
-    stdout = sanitize_text(manifest["stdout"], cap=PREVIEW_BYTE_CAP) if manifest["stdout"] else None
-    figure_paths = _persist_figures(session, artifact_id, manifest["figures"])
-    if manifest["status"] == "error":
+    raw_stdout = manifest.get("stdout")
+    stdout = sanitize_text(raw_stdout, cap=PREVIEW_BYTE_CAP) if raw_stdout else None
+    figure_paths = _persist_figures(session, artifact_id, manifest.get("figures") or [])
+    if manifest.get("status") != "ok":
         return ArtifactRecord(
             artifact_id=artifact_id,
             kind="python",
@@ -195,7 +220,7 @@ def _build_record(
             source=code,
             status="error",
             stdout=stdout,
-            error=sanitize_text(manifest["error"], cap=PREVIEW_BYTE_CAP),
+            error=sanitize_text(manifest.get("error") or "sandbox error", cap=PREVIEW_BYTE_CAP),
             figure_paths=figure_paths,
         )
     fields = _result_fields(session, artifact_id, tmp, manifest)
@@ -216,7 +241,7 @@ def _result_fields(
 ) -> dict[str, Any]:
     """Persist a tabular result (if any) and return the artifact's result-shaped fields."""
     source_result = tmp / "result.parquet"
-    if manifest["data"] and source_result.exists():
+    if manifest.get("data") and source_result.exists():
         dest = session.artifacts_dir / f"{artifact_id}.parquet"
         shutil.move(str(source_result), str(dest))
         columns, types, row_count, preview = tabular_preview(session.conn, dest)
@@ -227,7 +252,7 @@ def _result_fields(
             "data_path": str(dest.relative_to(session.session_dir)),
             "preview": preview,
         }
-    if manifest["result_repr"] is not None:
+    if manifest.get("result_repr") is not None:
         return {"preview": sanitize_text(manifest["result_repr"], cap=PREVIEW_BYTE_CAP)}
     return {}
 
