@@ -384,3 +384,24 @@ runtime failures (a bad table name, a user exception) are recorded as `error` ar
 returned, because a failed-but-attempted execution is still a receipt. `profile_dataset`
 returns markdown (what a human/Claude reads), not the structured report; profiling is
 metadata, not a numeric-claim source, so it needs no artifact.
+
+## D-031 (2026-06-16) — Eval suite scores the deterministic spine, end to end, demanding perfection
+
+The eval suite (`veritas.evals`, run via `python -m veritas.evals`) measures the part of
+Veritas that CI can reproduce: the statistical engine, not Claude's orchestration. Each of
+five cases is a seeded synthetic dataset run *through the real pipeline* — `ingest_file`
+then `discover` with full suppression — so the eval exercises M1+M4 together, not a mocked
+shortcut. A planted root cause is a column *pair*; a discovery is a recovery when its two
+columns equal a planted pair, and any other surfaced discovery is a false discovery. Two
+numbers come out, mirroring the README: root-cause recovery rate and false-discovery rate.
+The cases are chosen to exercise distinct mechanisms — a numeric driver (Spearman), a
+group shift (Kruskal-Wallis), a categorical association (chi-square), a strong cause beside
+a significant-but-trivial **trap** that the effect floor must kill, and a **pure-noise**
+case whose only correct answer is silence. Because the signals are strong and the seeds are
+fixed, the bar is exact perfection (100% recovery, 0% false discovery, every case passes) —
+a deterministic regression guard, so any future change that lets noise leak through
+suppression or drops a real cause fails the suite loudly rather than drifting a soft metric.
+The trap and no-signal cases are the load-bearing ones: they assert that suppression is
+doing real work (the trap is *floored*, `dropped_below_effect_floor >= 1`, never surfaced)
+and that silence holds. The suite ships in the wheel (runtime deps only) because it is a
+public artifact of the project's claims, not a private dev fixture.

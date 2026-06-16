@@ -19,7 +19,8 @@ Claude does the orchestration and deterministic Python does the rigor:
   effect-size floors, and a hard cap on surfaced findings. Silence is a feature.
 - **A public eval suite.** Synthetic datasets with planted root causes and red herrings, scored
   on root-cause recovery rate and false-discovery rate — including a case where the only
-  correct answer is "no significant change".
+  correct answer is "no significant change". Run it with `python -m veritas.evals` (see
+  [Evaluation](#evaluation)).
 
 ## Status
 
@@ -31,7 +32,7 @@ Claude does the orchestration and deterministic Python does the rigor:
 | M3 | Findings registry + deterministic claim verification | ✅ done |
 | M4 | Discovery probes + FDR suppression | ✅ done |
 | M5 | MCP server wiring (stdio), `uvx` entry point | ✅ done |
-| M6 | Eval suite with planted-cause cases + scorecard | ⬜ |
+| M6 | Eval suite with planted-cause cases + scorecard | ✅ done |
 | M7 | Skills, examples, finished docs | ⬜ |
 
 ## Quickstart
@@ -73,6 +74,26 @@ An architecture diagram lands in M7. In brief: Claude (via MCP tools plus a meth
 skill) orchestrates an `InvestigationSession`; all analysis runs in DuckDB and a sandboxed
 Python subprocess; every execution is persisted as an `Artifact`; findings are registered,
 deterministically verified against artifacts, and only verified findings can enter a report.
+
+## Evaluation
+
+The eval suite scores the part of Veritas that is deterministic and reproducible — the
+statistical engine, not Claude's orchestration. Five seeded synthetic datasets are run
+through the real pipeline (ingest → discovery with full suppression), and the surfaced
+discoveries are compared to the planted root causes:
+
+```sh
+python -m veritas.evals
+```
+
+Each case plants a distinct kind of signal — a numeric driver, a group shift, a
+categorical association — beside red herrings; one case plants a real cause next to a
+statistically significant but trivially small "trap" that the effect-size floor must reject,
+and one case plants nothing at all, so the only correct answer is silence. The scorecard
+reports two numbers, the **root-cause recovery rate** and the **false-discovery rate**.
+Because the signals are strong and the seeds are fixed, the suite demands perfection — every
+planted cause recovered, nothing spurious surfaced — so it acts as a regression guard:
+anything that lets noise leak through suppression, or drops a real cause, fails it loudly.
 
 ## Non-goals
 
