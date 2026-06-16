@@ -29,6 +29,7 @@ from veritas.discovery import discover as run_discovery
 from veritas.execute import run_sql as run_sql_query
 from veritas.findings import add_finding, verify_and_record
 from veritas.ingest import ingest_file
+from veritas.methodology import methodology
 from veritas.profile import profile_dataset as build_profile
 from veritas.responses import (
     ArtifactDigest,
@@ -402,8 +403,22 @@ def server_name(env: Mapping[str, str]) -> str:
     return env.get(SERVER_NAME_ENV, DEFAULT_SERVER_NAME)
 
 
+METHODOLOGY_PROMPT_NAME = "investigation_methodology"
+"""Name of the MCP prompt that serves the investigator methodology (M7)."""
+
+
+def _methodology_prompt() -> str:
+    """How to run a rigorous, receipts-backed investigation with Veritas."""
+    return methodology()
+
+
 def create_server(tools: VeritasTools, name: str | None = None) -> FastMCP:
-    """Build a FastMCP server exposing the nine tools bound to ``tools``.
+    """Build a FastMCP server exposing the nine tools and the methodology prompt.
+
+    The nine :class:`VeritasTools` methods register as tools; the investigator
+    methodology registers as an MCP prompt (``investigation_methodology``), so a client
+    that only speaks to the server still receives the receipts-or-it-didn't-happen
+    workflow without needing the separate Agent skill.
 
     Args:
         tools: the :class:`VeritasTools` whose methods become the MCP tools.
@@ -418,6 +433,7 @@ def create_server(tools: VeritasTools, name: str | None = None) -> FastMCP:
     mcp = FastMCP(name or DEFAULT_SERVER_NAME)
     for tool_name in _TOOL_ORDER:
         mcp.tool()(getattr(tools, tool_name))
+    mcp.prompt(name=METHODOLOGY_PROMPT_NAME)(_methodology_prompt)
     return mcp
 
 
