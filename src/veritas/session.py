@@ -20,7 +20,7 @@ DEFAULT_SESSIONS_BASE_DIR = Path(".veritas-sessions")
 """Default parent directory for session directories, relative to the working directory."""
 
 SourceFormat = Literal["csv", "parquet", "xlsx"]
-ArtifactKind = Literal["sql", "python"]
+ArtifactKind = Literal["sql", "python", "probe"]
 FindingStatus = Literal["unverified", "verified", "refuted"]
 
 
