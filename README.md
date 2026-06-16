@@ -30,16 +30,16 @@ Claude does the orchestration and deterministic Python does the rigor:
 | M2 | SQL/Python execution sandbox + artifact store | ✅ done |
 | M3 | Findings registry + deterministic claim verification | ✅ done |
 | M4 | Discovery probes + FDR suppression | ✅ done |
-| M5 | MCP server wiring (stdio), `uvx` entry point | ⬜ |
+| M5 | MCP server wiring (stdio), `uvx` entry point | ✅ done |
 | M6 | Eval suite with planted-cause cases + scorecard | ⬜ |
 | M7 | Skills, examples, finished docs | ⬜ |
 
 ## Quickstart
 
-Coming with M5. The target experience:
+Add Veritas to your MCP client (Claude Desktop / Claude Code). It runs over stdio via the
+`veritas` console script:
 
 ```jsonc
-// Claude Desktop / Claude Code MCP config (target, not yet functional)
 {
   "mcpServers": {
     "veritas": {
@@ -49,6 +49,23 @@ Coming with M5. The target experience:
   }
 }
 ```
+
+From a local checkout instead:
+
+```sh
+uv run veritas   # serves over stdio
+```
+
+The server exposes nine tools that drive one investigation: `ingest_dataset`,
+`profile_dataset`, `run_sql`, `run_python`, `discover`, `record_finding`,
+`verify_finding`, `get_artifact`, and `investigation_state`. The intended loop is
+load → profile → query → discover → make a claim → **verify** → report: every number a
+report makes must cite the artifact it came from, and `verify_finding` re-checks that
+citation in deterministic Python.
+
+Each launch is a fresh, single-analyst investigation. Override the session's parent
+directory with `VERITAS_SESSION_DIR` and the server's display name with
+`VERITAS_SERVER_NAME`.
 
 ## Architecture
 

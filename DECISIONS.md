@@ -350,3 +350,37 @@ ranking by value is a defensible heuristic (documented, revisit if it misleads).
 surfaced discovery's statistics are written as a one-row `probe` artifact, so its effect
 size and p-value are receipts that `findings.verify_finding` can check — discovery feeds
 the same verification spine as everything else.
+
+## D-029 (2026-06-16) — Server lifecycle: one fresh session per process; tools as methods
+
+The MCP server creates exactly one `InvestigationSession` at startup and holds it for the
+process lifetime — single-analyst, local-first, matching the README non-goals. A server
+launch is one investigation: the session is *fresh* each start (not reopened), so datasets
+and findings do not silently bleed across unrelated runs; durable reuse would need an
+explicit `VERITAS_SESSION_ID` and is deferred until there's a real use for it. The parent
+directory for session directories is configurable via `VERITAS_SESSION_DIR` (defaults to
+`.veritas-sessions`), and the display name via `VERITAS_SERVER_NAME` (D-002). The nine
+tools are methods of `VeritasTools`, which holds the session; `create_server` is the only
+code that touches FastMCP, registering each method with `mcp.tool()`. This keeps every
+tool a plain synchronous function that tests call and assert on directly — FastMCP's stdio
+transport is never in the unit-test path (only `main`, the console entry point, is
+`# pragma: no cover`). Because `from __future__ import annotations` stringifies signatures
+and FastMCP evaluates a tool's annotations against the *module's runtime globals*, any type
+named in a tool method's signature must be a real runtime import (e.g. `Sequence`), not a
+`TYPE_CHECKING`-only one — converters and non-tool helpers are exempt.
+
+## D-030 (2026-06-16) — The nine-tool surface returns lean views, not raw records
+
+The tools are `ingest_dataset`, `profile_dataset`, `run_sql`, `run_python`, `discover`,
+`record_finding`, `verify_finding`, `get_artifact`, and `investigation_state` — the full
+investigation loop (load → profile → query → discover → claim → verify → report) plus an
+overview (`investigation_state`) and a drill-down (`get_artifact`). They return the bounded
+view models in `responses.py`, never the on-disk `ArtifactRecord`/`Finding`: previews and
+errors are already sanitized when their artifacts are written, and the model is handed the
+identifiers it needs to keep going — above all the `artifact_id` that turns a number into a
+receipt. Policy violations (unsafe SQL/Python) propagate as exceptions, which FastMCP
+surfaces as tool errors, because they are usage errors the model must see and correct;
+runtime failures (a bad table name, a user exception) are recorded as `error` artifacts and
+returned, because a failed-but-attempted execution is still a receipt. `profile_dataset`
+returns markdown (what a human/Claude reads), not the structured report; profiling is
+metadata, not a numeric-claim source, so it needs no artifact.
