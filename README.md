@@ -3,8 +3,9 @@
 > **Receipts, or it didn't happen.** An open-source MCP server that turns Claude into a
 > rigorous, hypothesis-driven data investigator.
 
-> ⚠️ **Pre-release.** Veritas is under active development; the sections below describe the
-> design target. The [Status](#status) table shows what is actually built.
+> **Status: feature-complete v0.** All milestones M0–M7 are built and green (see the
+> [Status](#status) table). Veritas is `0.1.0` (alpha) — the surface is stable enough to use,
+> though the API may still change before 1.0.
 
 Veritas is **not a chat wrapper around a database**. It is an investigation harness in which
 Claude does the orchestration and deterministic Python does the rigor:
@@ -33,7 +34,7 @@ Claude does the orchestration and deterministic Python does the rigor:
 | M4 | Discovery probes + FDR suppression | ✅ done |
 | M5 | MCP server wiring (stdio), `uvx` entry point | ✅ done |
 | M6 | Eval suite with planted-cause cases + scorecard | ✅ done |
-| M7 | Skills, examples, finished docs | ⬜ |
+| M7 | Skills, examples, finished docs | ✅ done |
 
 ## Quickstart
 
@@ -68,12 +69,45 @@ Each launch is a fresh, single-analyst investigation. Override the session's par
 directory with `VERITAS_SESSION_DIR` and the server's display name with
 `VERITAS_SERVER_NAME`.
 
+## Methodology
+
+The tools are only half of Veritas; the other half is the discipline that uses them. That
+methodology — build a hypothesis tree, falsify branches with queries, and report only
+numbers that trace to a verified execution — ships two ways:
+
+- **In-protocol**, as the MCP prompt `investigation_methodology`, so any client that
+  connects to the server receives it.
+- **As an installable skill** for Claude Code / the Agent SDK:
+  [`skills/veritas-investigator/SKILL.md`](skills/veritas-investigator/SKILL.md).
+
+Both are the same text (a test keeps them identical). See
+[a worked investigation](docs/example-investigation.md) for the loop end to end, including
+how the receipts rule refuses an untraceable number.
+
 ## Architecture
 
-An architecture diagram lands in M7. In brief: Claude (via MCP tools plus a methodology
-skill) orchestrates an `InvestigationSession`; all analysis runs in DuckDB and a sandboxed
-Python subprocess; every execution is persisted as an `Artifact`; findings are registered,
-deterministically verified against artifacts, and only verified findings can enter a report.
+Claude — guided by the investigator skill — orchestrates; deterministic Python does the
+rigor. Everything an execution produces is persisted as an `Artifact`, and only findings
+whose every number traces to one can enter a report.
+
+```mermaid
+flowchart TD
+    Claude([Claude + investigator skill]) -->|MCP tools over stdio| Server[Veritas MCP server]
+    Server --> Session[InvestigationSession]
+    Session --> Duck[(DuckDB)]
+    Session --> Sandbox[[sandboxed Python subprocess]]
+    Duck -->|run_sql| Artifacts[(Artifacts: Parquet + bounded previews)]
+    Sandbox -->|run_python| Artifacts
+    Session -->|discover| Artifacts
+    Findings[Findings + numeric claims] -->|verify_finding, deterministic| Verify{every claim traces<br/>to an artifact?}
+    Artifacts --> Verify
+    Verify -->|yes| Report[May enter a report]
+    Verify -->|no| Refuse[Refused, fail-closed]
+```
+
+The boundaries that make this safe — the read-only SQL gate, the containment model of the
+Python sandbox, and the treatment of all dataset text as untrusted — are documented in
+[SECURITY.md](SECURITY.md) and the [decision log](DECISIONS.md).
 
 ## Evaluation
 

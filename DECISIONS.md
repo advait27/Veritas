@@ -405,3 +405,19 @@ The trap and no-signal cases are the load-bearing ones: they assert that suppres
 doing real work (the trap is *floored*, `dropped_below_effect_floor >= 1`, never surfaced)
 and that silence holds. The suite ships in the wheel (runtime deps only) because it is a
 public artifact of the project's claims, not a private dev fixture.
+
+## D-032 (2026-06-16) — Methodology has one source, shipped as both an MCP prompt and a skill
+
+The investigator methodology — the hypothesis-tree workflow and the phrasing rules that
+make `verify_finding` pass — is the discipline that turns the nine tools into an
+investigator, so it is a first-class shipped artifact, not just README prose. It lives once,
+as `INVESTIGATOR_METHODOLOGY` in `veritas/methodology.py`, and reaches Claude two ways: the
+server registers it as an MCP prompt (`investigation_methodology`) so a client that only
+speaks to the server still gets it in-protocol, and it is packaged as an installable Agent
+skill at `skills/veritas-investigator/SKILL.md` for Claude Code / the Agent SDK. A prompt is
+not a tool, so this does not disturb the nine-tool surface (D-030). The skill's body is the
+methodology *verbatim*; a test (`test_methodology.py`) parses the skill's front matter and
+asserts the body equals `INVESTIGATOR_METHODOLOGY`, so the two surfaces cannot drift. The
+worked example (`docs/example-investigation.md`) is likewise kept honest: its mechanics are
+executed by `test_example_investigation.py`, so the documented verification outcomes are
+real rather than illustrative. With M7, the M0–M7 plan is complete.
