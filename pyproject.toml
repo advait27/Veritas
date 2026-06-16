@@ -31,6 +31,9 @@ dependencies = [
     "statsmodels>=0.14",
 ]
 
+[project.scripts]
+veritas = "veritas.server:main"
+
 [dependency-groups]
 dev = [
     "mypy>=1.13",
