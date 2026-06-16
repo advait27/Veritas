@@ -319,3 +319,34 @@ numerically) refuses verification rather than risk emitting an untraceable figur
 is exactly the failure mode Veritas exists to prevent; the M7 methodology guides
 phrasing so every figure is a real claim. A finding with no numbers and no claims is
 vacuously verified — it makes no numeric assertions to refute.
+
+## D-027 (2026-06-16) — Discovery probe set: three nonparametric tests with bounded effect sizes
+
+Discovery enumerates three probe types, each a nonparametric test (robust to arbitrary
+real-world distributions) paired with a [0, 1]-scaled effect size: numeric×numeric →
+Spearman correlation (|rho|); numeric×categorical group difference → Kruskal-Wallis
+(epsilon-squared); categorical×categorical → chi-square (Cramér's V). Temporal columns
+are folded into the numeric family by mapping to epoch nanoseconds, so a trend is just a
+Spearman of value vs time — no separate trend machinery. Columns are classified from
+their DuckDB type; categoricals are bounded to cardinality 2..30 (an id-like column is
+not an association), numerics must have ≥2 distinct values, and every probe requires a
+minimum sample (and per-group minimum for Kruskal) or it is dropped as insufficient.
+Bounded, comparable effect metrics let a single effect-size floor and one ranking work
+across heterogeneous probe types.
+
+## D-028 (2026-06-16) — Suppression: BH-FDR, effect floors, a hard cap, and a conserved ledger
+
+The pass is generate → test → *suppress* → rank, and suppression is deliberately
+aggressive because silence is a feature. All p-values go through one Benjamini-Hochberg
+FDR control (default α = 0.1) — controlling the false-discovery rate across the whole
+family, not per-probe — then survivors must clear a per-metric effect-size floor
+(Cramér's V ≥ 0.1, epsilon² ≥ 0.06, |rho| ≥ 0.3), then the strongest ≤ 5 surface. A
+dataset with no real signal yields an empty report. Nothing is dropped silently: the
+`DiscoverySummary` is a conserved ledger (`generated = probe_cap + run`;
+`run = not_significant + below_floor + finding_cap + surfaced`), so a caller can always
+see how much was suppressed and why. Ranking uses the raw effect size; the metrics are
+not strictly commensurable across probe types, but all are 0..1 "larger = stronger", so
+ranking by value is a defensible heuristic (documented, revisit if it misleads). Every
+surfaced discovery's statistics are written as a one-row `probe` artifact, so its effect
+size and p-value are receipts that `findings.verify_finding` can check — discovery feeds
+the same verification spine as everything else.
