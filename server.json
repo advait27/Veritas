@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.advait27/veritas",
+  "description": "Turns Claude into a rigorous, hypothesis-driven data investigator: every numeric claim must trace to an executed artifact, verified deterministically.",
+  "repository": {
+    "url": "https://github.com/advait27/Veritas",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "registryBaseUrl": "https://ghcr.io",
+      "identifier": "advait27/veritas",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
