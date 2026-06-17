@@ -33,4 +33,4 @@ Initial release — a feature-complete v0 of the Veritas MCP server.
 - Documentation: README with architecture diagram, a worked-investigation walkthrough,
   `SECURITY.md` threat model, and a full decision log (`DECISIONS.md`).
 
-[0.1.0]: https://pypi.org/project/veritas-mcp/0.1.0/
+[0.1.0]: https://github.com/advait27/Veritas

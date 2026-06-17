@@ -38,23 +38,26 @@ Claude does the orchestration and deterministic Python does the rigor:
 
 ## Quickstart
 
-Add Veritas to your MCP client (Claude Desktop / Claude Code). It runs over stdio via the
-`veritas` console script:
+Veritas is distributed as source on GitHub (it is not published to a package index). With
+[uv](https://docs.astral.sh/uv/), `uvx` installs and runs the `veritas` console script
+straight from the repository — point your MCP client (Claude Desktop / Claude Code) at it:
 
 ```jsonc
 {
   "mcpServers": {
     "veritas": {
       "command": "uvx",
-      "args": ["veritas-mcp"]
+      "args": ["--from", "git+https://github.com/advait27/Veritas.git", "veritas"]
     }
   }
 }
 ```
 
-From a local checkout instead:
+Or from a local clone:
 
 ```sh
+git clone https://github.com/advait27/Veritas.git
+cd Veritas
 uv run veritas   # serves over stdio
 ```
 
