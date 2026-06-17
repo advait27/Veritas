@@ -34,6 +34,12 @@ dependencies = [
 [project.scripts]
 veritas = "veritas.server:main"
 
+[project.urls]
+Homepage = "https://github.com/advait27/Veritas"
+Repository = "https://github.com/advait27/Veritas"
+Issues = "https://github.com/advait27/Veritas/issues"
+Changelog = "https://github.com/advait27/Veritas/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "mypy>=1.13",

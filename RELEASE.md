@@ -11,8 +11,8 @@ Do this once, before the first release, while logged in to PyPI:
 1. Go to <https://pypi.org/manage/account/publishing/> ("Add a new pending publisher").
 2. Fill in:
    - **PyPI Project Name:** `veritas-mcp`
-   - **Owner:** your GitHub user or org (e.g. `OWNER`)
-   - **Repository name:** `veritas-mcp`
+   - **Owner:** `advait27`
+   - **Repository name:** `Veritas`
    - **Workflow name:** `release.yml`
    - **Environment name:** `pypi`
 3. Save. PyPI will now accept an OIDC-authenticated upload from this repo's `release.yml`
