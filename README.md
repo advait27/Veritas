@@ -61,6 +61,22 @@ cd Veritas
 uv run veritas   # serves over stdio
 ```
 
+Or with Docker — no local Python/uv needed; mount the data you want analyzed:
+
+```jsonc
+{
+  "mcpServers": {
+    "veritas": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-v", "${HOME}:/data", "ghcr.io/advait27/veritas"]
+    }
+  }
+}
+```
+
+A one-click Claude Desktop extension and the full list of MCP directories are covered in
+[docs/distribution.md](docs/distribution.md).
+
 The server exposes nine tools that drive one investigation: `ingest_dataset`,
 `profile_dataset`, `run_sql`, `run_python`, `discover`, `record_finding`,
 `verify_finding`, `get_artifact`, and `investigation_state`. The intended loop is
