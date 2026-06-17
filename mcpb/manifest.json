@@ -1,0 +1,34 @@
+{
+  "manifest_version": "0.2",
+  "name": "veritas",
+  "display_name": "Veritas",
+  "version": "0.1.0",
+  "description": "A rigorous, hypothesis-driven data investigator: every numeric claim must trace to an executed artifact.",
+  "long_description": "Veritas turns Claude into a disciplined data investigator. It ingests CSV/Parquet/Excel into DuckDB, profiles it, runs read-only SQL and sandboxed Python, and runs an autonomous discovery pass with false-discovery-rate suppression. Its defining rule is receipts-or-it-didn't-happen: every numeric claim in a report must trace to an executed artifact, verified deterministically. Requires uv (https://docs.astral.sh/uv/) on PATH; the server is fetched and run from GitHub on first launch.",
+  "author": { "name": "advait27", "url": "https://github.com/advait27" },
+  "homepage": "https://github.com/advait27/Veritas",
+  "documentation": "https://github.com/advait27/Veritas#readme",
+  "repository": { "type": "git", "url": "https://github.com/advait27/Veritas" },
+  "license": "Apache-2.0",
+  "keywords": ["mcp", "duckdb", "data-analysis", "statistics", "root-cause"],
+  "tools": [
+    { "name": "ingest_dataset", "description": "Load a CSV/Parquet/Excel file into DuckDB." },
+    { "name": "profile_dataset", "description": "Profile columns, types, nulls, and time coverage." },
+    { "name": "run_sql", "description": "Run a read-only SQL query; persist the result as an artifact." },
+    { "name": "run_python", "description": "Run sandboxed Python over the datasets." },
+    { "name": "discover", "description": "Autonomous discovery pass with FDR suppression." },
+    { "name": "record_finding", "description": "Register a finding with numeric claims." },
+    { "name": "verify_finding", "description": "Deterministically verify a finding's numbers." },
+    { "name": "get_artifact", "description": "Inspect one execution artifact (a receipt)." },
+    { "name": "investigation_state", "description": "List datasets, artifacts, and findings." }
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "uvx",
+    "mcp_config": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/advait27/Veritas.git", "veritas"],
+      "env": {}
+    }
+  }
+}
