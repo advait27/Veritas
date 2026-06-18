@@ -75,10 +75,11 @@ Awesome-list entry (e.g. under a *Data Science / Databases* heading):
 
 ## 3. Claude Desktop Extension
 
-A one-click `.mcpb` bundle lives in [`../mcpb/`](../mcpb/). Build it with
-`npx @anthropic-ai/mcpb pack`, then attach the resulting `.mcpb` to a
-[GitHub Release](https://github.com/advait27/Veritas/releases) so users can download and
-open it in Claude Desktop. See [mcpb/README.md](../mcpb/README.md).
+A one-click `.mcpb` bundle lives in [`../mcpb/`](../mcpb/). Pushing a version tag runs the
+[Desktop Extension workflow](../.github/workflows/extension.yml), which builds the `.mcpb`
+and attaches it to the matching
+[GitHub Release](https://github.com/advait27/Veritas/releases) for users to download and
+open in Claude Desktop. See [mcpb/README.md](../mcpb/README.md).
 
 ## Not applicable
 

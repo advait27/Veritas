@@ -27,9 +27,13 @@ npx @anthropic-ai/mcpb info veritas.mcpb
 
 - **Locally:** open the built `.mcpb` with Claude Desktop (or drag it onto the
   Settings → Extensions pane) and confirm the install.
-- **For others:** attach the built `.mcpb` to a [GitHub Release](https://github.com/advait27/Veritas/releases)
-  so people can download and open it. (Optionally sign it first with
-  `npx @anthropic-ai/mcpb sign`; unsigned bundles install with a warning.)
+- **For others (automated):** pushing a version tag
+  (`git tag v0.1.0 && git push origin v0.1.0`) runs the
+  [Desktop Extension workflow](../.github/workflows/extension.yml), which builds the
+  `.mcpb` and attaches it to the matching
+  [GitHub Release](https://github.com/advait27/Veritas/releases) automatically (it also
+  syncs the bundle version to the tag). Unsigned bundles install with a warning; sign with
+  `npx @anthropic-ai/mcpb sign` if you want.
 
 ## Notes
 
